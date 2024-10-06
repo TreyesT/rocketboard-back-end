@@ -19,6 +19,11 @@ sales_collection = mongo.db.sales
 analytics_collection = mongo.db.analytics
 tasks_collection = mongo.db.tasks
 
+@app.route('/api/health', methods=['GET'])
+def health():
+    return jsonify({"status": "OK"}), 200
+
+
 # 1. Insert Sales Data
 @app.route('/sales', methods=['POST'])
 def insert_sales_data():
