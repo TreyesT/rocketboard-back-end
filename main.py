@@ -25,28 +25,28 @@ def health():
 
 
 # 1. Insert Sales Data
-@app.route('/sales', methods=['POST'])
+@app.route('/api/sales', methods=['POST'])
 def insert_sales_data():
     data = request.json
     sales_id = sales_collection.insert_one(data).inserted_id
     return jsonify({"message": "Sales data inserted", "id": str(sales_id)}), 201
 
 # 2. Insert Web Analytics Data
-@app.route('/analytics', methods=['POST'])
+@app.route('/api/analytics', methods=['POST'])
 def insert_analytics_data():
     data = request.json
     analytics_id = analytics_collection.insert_one(data).inserted_id
     return jsonify({"message": "Analytics data inserted", "id": str(analytics_id)}), 201
 
 # 3. Insert Task Data for Project Management
-@app.route('/tasks', methods=['POST'])
+@app.route('/api/tasks', methods=['POST'])
 def insert_task_data():
     data = request.json
     task_id = tasks_collection.insert_one(data).inserted_id
     return jsonify({"message": "Task data inserted", "id": str(task_id)}), 201
 
 
-@app.route('/sales', methods=['GET'])
+@app.route('/api/sales', methods=['GET'])
 def get_sales_data():
     sales = mongo.db.sales.find()  # Replace 'sales' with your collection name
     sales_list = []
@@ -56,7 +56,7 @@ def get_sales_data():
     return jsonify(sales_list), 200
 
 
-@app.route('/upload', methods=['POST'])
+@app.route('/api/upload', methods=['POST'])
 def upload_file():
     if 'file' not in request.files:
         return jsonify({'message': 'No file part in the request'}), 400
