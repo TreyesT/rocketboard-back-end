@@ -25,4 +25,9 @@ jobs:
 
       - name: Deploy to server
         run: |
-          ssh admin_reyes@157.245.241.27 'cd /home/rocketboardai/rocketboard-back-end && git pull && docker-compose down && docker-compose up -d --build'
+          ssh admin_reyes@157.245.241.27 '
+            cd /home/rocketboardai/rocketboard-back-end &&
+            git pull &&
+            docker-compose down --remove-orphans &&
+            docker-compose up -d --build
+          '
