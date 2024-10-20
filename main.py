@@ -1,16 +1,19 @@
 import csv
+import json
 import os
 from datetime import datetime
 from flask import Flask, request, jsonify
 from flask_pymongo import PyMongo
-from bson.objectid import ObjectId
 from flask_cors import CORS
-import json
+from bson.objectid import ObjectId
+from dotenv import load_dotenv
+
+load_dotenv()  # Load environment variables from .env
 
 app = Flask(__name__)
 CORS(app)
-# MongoDB configuration (replace with your MongoDB URI)
-app.config["MONGO_URI"] = os.environ.get("MONGO_URI", "mongodb://mongo:27017/mydb")
+
+app.config["MONGO_URI"] = os.environ.get("MONGO_URI")
 mongo = PyMongo(app)
 
 
