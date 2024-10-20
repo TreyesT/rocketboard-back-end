@@ -1,16 +1,18 @@
 import csv
-
-from flask import Flask, request, jsonify
-from flask_pymongo import PyMongo
-from bson.objectid import ObjectId
-from flask_cors import CORS
 import json
 import os
+from flask import Flask, request, jsonify
+from flask_pymongo import PyMongo
+from flask_cors import CORS
+from bson.objectid import ObjectId
+from dotenv import load_dotenv
+
+load_dotenv()  # Load environment variables from .env
 
 app = Flask(__name__)
 CORS(app)
-# MongoDB configuration (replace with your MongoDB URI)
-app.config["MONGO_URI"] = os.environ.get("MONGO_URI", "mongodb://mongo:27017/mydb")
+
+app.config["MONGO_URI"] = os.environ.get("MONGO_URI")
 mongo = PyMongo(app)
 
 
@@ -48,7 +50,7 @@ def insert_task_data():
 
 @app.route('/api/sales', methods=['GET'])
 def get_sales_data():
-    sales = mongo.db.sales.find()  # Replace 'sales' with your collection name
+    sales = mongo.db.sales.find()
     sales_list = []
     for sale in sales:
         sale['_id'] = str(sale['_id'])  # Convert ObjectId to string
