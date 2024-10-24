@@ -68,35 +68,77 @@ def restore_sales_collection(backup_collection_name):
     if backup_data:
         sales_collection.insert_many(backup_data)
 
-# 4. Upload and Merge Endpoint (with backup before merge)
-@app.route('/api/upload', methods=['POST'])
-def upload_file():
+# 4. Upload and Preview Endpoint
+@app.route('/api/upload-preview', methods=['POST'])
+def upload_preview():
     if 'file' not in request.files:
         return jsonify({'message': 'No file part in the request'}), 400
     file = request.files['file']
     if file.filename == '':
         return jsonify({'message': 'No file selected for uploading'}), 400
     if file and file.filename.endswith('.json'):
-        sales_data = process_json(file)
+        new_data = process_json(file)
+        # Return the new data for preview without merging
+        return jsonify({'message': 'File uploaded for preview', 'new_data': new_data}), 200
+    else:
+        return jsonify({'message': 'Invalid file type. Please upload a JSON file.'}), 400
 
-        # Remove _id field to avoid duplicate key errors
-        for sale in sales_data:
-            sale.pop('_id', None)
+# 5. Get Existing Data Schema
+@app.route('/api/sales-schema', methods=['GET'])
+def get_sales_schema():
+    sales = sales_collection.find_one()
+    if sales:
+        schema = get_schema(sales)
+        return jsonify({'schema': schema}), 200
+    else:
+        return jsonify({'schema': []}), 200  # No data in the collection
 
-        # Trigger backup before merging
-        backup_name = backup_sales_collection()
+def get_schema(document):
+    return list(document.keys())
 
-        # Insert the uploaded data
-        sales_collection.insert_many(sales_data)
+# 6. Merge Data Endpoint
+@app.route('/api/merge-data', methods=['POST'])
+def merge_data():
+    data = request.json
+    new_data = data.get('new_data')
+    selected_schema = data.get('selected_schema')  # 'original' or 'new'
 
-    return jsonify({'message': 'File uploaded and data merged successfully', 'backup_name': backup_name}), 201
+    if not new_data or not selected_schema:
+        return jsonify({'message': 'Missing new data or selected schema'}), 400
+
+    # Adjust new_data based on selected schema
+    if selected_schema == 'original':
+        # Get original schema
+        sales = sales_collection.find_one()
+        if sales:
+            original_schema = set(sales.keys())
+            for item in new_data:
+                # Remove keys not in original schema
+                keys_to_remove = set(item.keys()) - original_schema
+                for key in keys_to_remove:
+                    del item[key]
+        else:
+            # No existing data, use new data as is
+            pass
+    elif selected_schema == 'new':
+        # Optionally, update existing data to match new schema
+        # This could be complex depending on data integrity
+        pass  # For simplicity, we won't modify existing data here
+
+    # Trigger backup before merging
+    backup_name = backup_sales_collection()
+
+    # Insert the adjusted new data
+    sales_collection.insert_many(new_data)
+
+    return jsonify({'message': 'Data merged successfully', 'backup_name': backup_name}), 200
 
 def process_json(file):
     """ Process uploaded JSON file """
     data = json.load(file.stream)
     return data
 
-# 5. Restore Backup Endpoint
+# 7. Restore Backup Endpoint
 @app.route('/api/restore-backup', methods=['POST'])
 def restore_backup():
     backup_collection_name = request.json.get('backup_name')
