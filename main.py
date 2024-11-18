@@ -7,6 +7,11 @@ from flask_pymongo import PyMongo
 from flask_cors import CORS
 from bson.objectid import ObjectId
 from dotenv import load_dotenv
+import io
+import pandas as pd
+import xmltodict
+import requests
+import traceback
 
 load_dotenv()  # Load environment variables from .env
 
@@ -16,7 +21,6 @@ CORS(app)
 app.config["MONGO_URI"] = os.environ.get("MONGO_URI")
 mongo = PyMongo(app)
 
-
 # Access collections
 sales_collection = mongo.db.sales
 analytics_collection = mongo.db.analytics
@@ -25,7 +29,6 @@ tasks_collection = mongo.db.tasks
 @app.route('/api/health', methods=['GET'])
 def health():
     return jsonify({"status": "OK"}), 200
-
 
 # 1. Insert Sales Data
 @app.route('/api/sales', methods=['POST'])
@@ -37,7 +40,7 @@ def insert_sales_data():
 # 2. Get Sales Data
 @app.route('/api/sales', methods=['GET'])
 def get_sales_data():
-    sales = mongo.db.sales.find()
+    sales = sales_collection.find()
     sales_list = []
     for sale in sales:
         sale['_id'] = str(sale['_id'])  # Convert ObjectId to string
@@ -76,12 +79,22 @@ def upload_preview():
     file = request.files['file']
     if file.filename == '':
         return jsonify({'message': 'No file selected for uploading'}), 400
-    if file and file.filename.endswith('.json'):
-        new_data = process_json(file)
+    try:
+        filename = file.filename.lower()
+        if filename.endswith('.json'):
+            new_data = process_json(file)
+        elif filename.endswith('.csv'):
+            new_data = process_csv(file)
+        elif filename.endswith('.xlsx') or filename.endswith('.xls'):
+            new_data = process_excel(file)
+        elif filename.endswith('.xml'):
+            new_data = process_xml(file)
+        else:
+            return jsonify({'message': 'Invalid file type. Please upload a JSON, CSV, XLSX, XLS, or XML file.'}), 400
         # Return the new data for preview without merging
         return jsonify({'message': 'File uploaded for preview', 'new_data': new_data}), 200
-    else:
-        return jsonify({'message': 'Invalid file type. Please upload a JSON file.'}), 400
+    except Exception as e:
+        return jsonify({'message': f'Error processing file: {str(e)}'}), 500
 
 # 5. Get Existing Data Schema
 @app.route('/api/sales-schema', methods=['GET'])
@@ -122,7 +135,6 @@ def merge_data():
             pass
     elif selected_schema == 'new':
         # Optionally, update existing data to match new schema
-        # This could be complex depending on data integrity
         pass  # For simplicity, we won't modify existing data here
 
     # Trigger backup before merging
@@ -136,7 +148,89 @@ def merge_data():
 def process_json(file):
     """ Process uploaded JSON file """
     data = json.load(file.stream)
+    # Ensure numerical fields are correct types
+    for record in data:
+        record['sales_amount'] = float(record.get('sales_amount', 0))
+        record['units_sold'] = int(record.get('units_sold', 0))
     return data
+
+def process_csv(file):
+    """ Process uploaded CSV file """
+    try:
+        # Read the file content and decode it
+        file_contents = file.read().decode('utf-8', errors='ignore')
+        decoded_file = io.StringIO(file_contents)
+        csv_reader = csv.DictReader(decoded_file)
+        data = []
+        for row in csv_reader:
+            # Convert numerical fields safely
+            try:
+                row['sales_amount'] = float(row.get('sales_amount', 0))
+            except ValueError:
+                row['sales_amount'] = 0.0  # Default value or handle as needed
+            try:
+                row['units_sold'] = int(row.get('units_sold', 0))
+            except ValueError:
+                row['units_sold'] = 0  # Default value or handle as needed
+            # Nest 'location' and 'gender' under 'customer'
+            customer_info = {
+                'location': row.pop('location', None),
+                'gender': row.pop('gender', None)
+            }
+            row['customer'] = customer_info
+            data.append(row)
+        return data
+    except Exception as e:
+        traceback.print_exc()
+        raise Exception(f"Error processing CSV file: {str(e)}")
+
+def process_excel(file):
+    """ Process uploaded Excel file """
+    try:
+        df = pd.read_excel(file)
+        # Ensure numerical fields are correct types
+        df['sales_amount'] = df['sales_amount'].astype(float)
+        df['units_sold'] = df['units_sold'].astype(int)
+        data = df.to_dict(orient='records')
+        return data
+    except Exception as e:
+        raise Exception(f"Error reading Excel file: {str(e)}")
+
+def process_xml(file):
+    """ Process uploaded XML file """
+    try:
+        content = file.read()
+        xml_dict = xmltodict.parse(content)
+
+        # Function to recursively find the list of records
+        def find_records(node):
+            if isinstance(node, list):
+                return node
+            elif isinstance(node, dict):
+                for key, value in node.items():
+                    records = find_records(value)
+                    if records is not None:
+                        return records
+            return None
+
+        records = find_records(xml_dict)
+        if records is None:
+            raise Exception("Could not find records in XML file")
+
+        data = []
+        for record in records:
+            # Convert OrderedDict to dict
+            record = dict(record)
+            # Convert numerical fields to appropriate types
+            record['sales_amount'] = float(record.get('sales_amount', 0))
+            record['units_sold'] = int(record.get('units_sold', 0))
+            # Process nested 'customer' data
+            if 'customer' in record:
+                record['customer'] = dict(record['customer'])
+            data.append(record)
+        return data
+    except Exception as e:
+        raise Exception(f"Error processing XML file: {str(e)}")
 
 # 7. Restore Backup Endpoint
 @app.route('/api/restore-backup', methods=['POST'])
@@ -150,9 +244,71 @@ def restore_backup():
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
+# 8. Upload and Merge Data Endpoint
+@app.route('/api/upload', methods=['POST'])
+def upload_and_merge_data():
+    if 'file' not in request.files:
+        return jsonify({'message': 'No file part in the request'}), 400
+    file = request.files['file']
+    if file.filename == '':
+        return jsonify({'message': 'No file selected for uploading'}), 400
+    try:
+        filename = file.filename.lower()
+        if filename.endswith('.json'):
+            new_data = process_json(file)
+        elif filename.endswith('.csv'):
+            new_data = process_csv(file)
+        elif filename.endswith('.xlsx') or filename.endswith('.xls'):
+            new_data = process_excel(file)
+        elif filename.endswith('.xml'):
+            new_data = process_xml(file)
+        else:
+            return jsonify({'message': 'Invalid file type. Please upload a JSON, CSV, XLSX, XLS, or XML file.'}), 400
 
+        # Get existing sales data from the database
+        local_data_cursor = sales_collection.find()
+        local_data = list(local_data_cursor)
+        # Convert ObjectId to string in local_data
+        for doc in local_data:
+            doc['_id'] = str(doc['_id'])
 
+        # Prepare payload for the merge request
+        payload = {
+            'local_data': local_data,
+            'new_data': new_data
+        }
 
+        # Send the merge request to the other server
+        merge_url = 'http://167.172.135.70:5000/merge'
+
+        response = requests.post(merge_url, json=payload)
+
+        if response.status_code == 200:
+            # Parse the merged data from the response
+            merged_data = response.json().get('merged_data')
+
+            if merged_data:
+                # Backup existing sales data
+                backup_name = backup_sales_collection()
+
+                # Replace existing data in the database with the merged data
+                sales_collection.delete_many({})
+
+                # Convert '_id' fields back to ObjectId
+                for doc in merged_data:
+                    if '_id' in doc:
+                        doc['_id'] = ObjectId(doc['_id'])
+
+                sales_collection.insert_many(merged_data)
+
+                return jsonify({'message': 'Data merged successfully', 'backup_name': backup_name}), 200
+            else:
+                return jsonify({'message': 'Merge failed: No merged data received from the server'}), 500
+        else:
+            return jsonify({'message': f'Merge failed: {response.text}'}), response.status_code
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({'message': f'Error processing file: {str(e)}'}), 500
 
 if __name__ == '__main__':
-    app.run(debug=True, host = '0.0.0.0', port = 5000)
+    app.run(debug=True, host='0.0.0.0', port=5000)
