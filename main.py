@@ -278,10 +278,18 @@ def upload_and_merge_data():
             'new_data': new_data
         }
 
+        # Retrieve the API token
+        api_token = os.environ.get('API_TOKEN')
+
+        # Set the headers with the Authorization token
+        headers = {
+            'Authorization': f'Bearer {api_token}'
+        }
+
         # Send the merge request to the other server
         merge_url = 'http://167.172.135.70:5000/merge'
 
-        response = requests.post(merge_url, json=payload)
+        response = requests.post(merge_url, json=payload, headers=headers)
 
         if response.status_code == 200:
             # Parse the merged data from the response
