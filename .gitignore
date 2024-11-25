@@ -55,3 +55,4 @@ Thumbs.db
 
 # Env files
 .env
+clear_db.py
