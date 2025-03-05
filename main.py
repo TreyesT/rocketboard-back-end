@@ -96,15 +96,259 @@ def upload_preview():
     except Exception as e:
         return jsonify({'message': f'Error processing file: {str(e)}'}), 500
 
-# 5. Get Existing Data Schema
+# # 5. Get Existing Data Schema
+# @app.route('/api/sales-schema', methods=['GET'])
+# def get_sales_schema():
+#     sales = sales_collection.find_one()
+#     if sales:
+#         schema = get_schema(sales)
+#         return jsonify({'schema': schema}), 200
+#     else:
+#         return jsonify({'schema': []}), 200  # No data in the collection
+
+@app.route('/api/process-merge-mappings', methods=['POST'])
+def process_merge_with_mappings():
+    try:
+        data = request.json
+        new_data = data.get('new_data', [])
+        field_mappings = data.get('field_mappings', {}).get('mappings', [])
+        matching_fields = data.get('matching_fields', [])
+
+        if not new_data or not field_mappings:
+            return jsonify({
+                'message': 'Missing new data or field mappings',
+                'status': 'error'
+            }), 400
+
+        # Create a dictionary for easier access to mappings
+        mapping_dict = {mapping['existing']: mapping['new'] for mapping in field_mappings if mapping['new']}
+
+        # Transform the new data according to the mappings
+        transformed_data = []
+        for record in new_data:
+            transformed_record = {}
+
+            # Apply field mappings, creating nested objects as needed
+            for existing_field, new_field in mapping_dict.items():
+                if new_field in record:
+                    # Handle nested fields in existing_field
+                    if '.' in existing_field:
+                        parts = existing_field.split('.')
+                        current = transformed_record
+
+                        # Build the nested structure
+                        for i, part in enumerate(parts):
+                            if i == len(parts) - 1:
+                                # Last part is the actual field
+                                current[part] = record[new_field]
+                            else:
+                                # Create nested objects if they don't exist
+                                if part not in current:
+                                    current[part] = {}
+                                current = current[part]
+                    else:
+                        # Simple field, no nesting
+                        transformed_record[existing_field] = record[new_field]
+
+            # Only add records that have mapped values
+            if transformed_record:
+                transformed_data.append(transformed_record)
+
+        if not transformed_data:
+            return jsonify({
+                'message': 'No valid records after applying mappings',
+                'status': 'error'
+            }), 400
+
+        # Backup current data
+        backup_name = backup_sales_collection()
+
+        # Get existing sales data
+        existing_data = list(sales_collection.find())
+        # Convert ObjectIds to strings for comparison
+        for doc in existing_data:
+            doc['_id'] = str(doc['_id'])
+
+        # Merge the data based only on matching fields
+        merged_data = merge_with_existing_data(existing_data, transformed_data, matching_fields)
+
+        # Convert string IDs back to ObjectIds if they exist
+        for doc in merged_data:
+            if '_id' in doc and isinstance(doc['_id'], str):
+                try:
+                    doc['_id'] = ObjectId(doc['_id'])
+                except:
+                    # If conversion fails, remove the _id so MongoDB can assign a new one
+                    del doc['_id']
+
+        # Clear existing collection and insert merged data
+        sales_collection.delete_many({})
+        sales_collection.insert_many(merged_data)
+
+        return jsonify({
+            'message': 'Data merged successfully with field mappings',
+            'status': 'success',
+            'backup_name': backup_name,
+            'record_count': len(merged_data)
+        }), 200
+
+    except Exception as e:
+        return jsonify({
+            'message': f'Error processing merge: {str(e)}',
+            'status': 'error'
+        }), 500
+
+# Helper function to check if records match based on nested fields too
+def records_match(record1, record2, matching_fields):
+    for field in matching_fields:
+        # Handle nested fields
+        if '.' in field:
+            parts = field.split('.')
+            value1 = record1
+            value2 = record2
+
+            # Navigate to the nested value
+            for part in parts:
+                value1 = value1.get(part) if isinstance(value1, dict) else None
+                value2 = value2.get(part) if isinstance(value2, dict) else None
+
+            if value1 != value2:
+                return False
+        else:
+            # Simple field comparison
+            if record1.get(field) != record2.get(field):
+                return False
+
+    return True
+
+# Helper function to merge data based on matching fields
+# def merge_with_existing_data(existing_data, new_data, matching_fields):
+#     merged_data = []
+#     processed_existing_data = set()
+#
+#     # Process each record in the new data
+#     for new_record in new_data:
+#         match_found = False
+#
+#         # Check against existing data
+#         for i, existing_record in enumerate(existing_data):
+#             # Only check records we haven't processed yet
+#             if i in processed_existing_data:
+#                 continue
+#
+#             # Check if records match based on matching fields
+#             is_match = True
+#             for field in matching_fields:
+#                 if field in existing_record and field in new_record:
+#                     if existing_record[field] != new_record[field]:
+#                         is_match = False
+#                         break
+#                 else:
+#                     # If matching field doesn't exist in both records, not a match
+#                     is_match = False
+#                     break
+#
+#             if is_match:
+#                 match_found = True
+#                 processed_existing_data.add(i)
+#
+#                 # Merge the records, preferring values from new record
+#                 merged_record = {**existing_record}
+#                 for field, value in new_record.items():
+#                     if value is not None:
+#                         merged_record[field] = value
+#
+#                 merged_data.append(merged_record)
+#                 break
+#
+#         # If no match found, add the new record as is
+#         if not match_found:
+#             merged_data.append(new_record)
+#
+#     # Add remaining existing records that weren't matched
+#     for i, existing_record in enumerate(existing_data):
+#         if i not in processed_existing_data:
+#             merged_data.append(existing_record)
+#
+#     return merged_data
+
+
+def merge_with_existing_data(existing_data, new_data, matching_fields):
+    merged_data = []
+    processed_existing_data = set()
+
+    # Process each record in the new data
+    for new_record in new_data:
+        match_found = False
+
+        # Check against existing data
+        for i, existing_record in enumerate(existing_data):
+            # Only check records we haven't processed yet
+            if i in processed_existing_data:
+                continue
+
+            # Check if records match based on matching fields
+            if records_match(existing_record, new_record, matching_fields):
+                match_found = True
+                processed_existing_data.add(i)
+
+                # Create merged record by preserving structure
+                merged_record = {**existing_record}
+
+                # Update with new data at the field level
+                for field, value in new_record.items():
+                    if isinstance(value, dict) and field in merged_record and isinstance(merged_record[field], dict):
+                        # For nested objects, merge recursively
+                        merged_record[field] = {**merged_record[field], **value}
+                    else:
+                        # For simple fields or complete replacement of nested objects
+                        merged_record[field] = value
+
+                merged_data.append(merged_record)
+                break
+
+        # If no match found, add the new record as is
+        if not match_found:
+            merged_data.append(new_record)
+
+    # Add remaining existing records that weren't matched
+    for i, existing_record in enumerate(existing_data):
+        if i not in processed_existing_data:
+            merged_data.append(existing_record)
+
+    return merged_data
+
+# Update the existing sales-schema endpoint to include nested fields
 @app.route('/api/sales-schema', methods=['GET'])
 def get_sales_schema():
     sales = sales_collection.find_one()
     if sales:
-        schema = get_schema(sales)
+        schema = get_schema_with_nested(sales)
         return jsonify({'schema': schema}), 200
     else:
         return jsonify({'schema': []}), 200  # No data in the collection
+
+def get_schema_with_nested(document, prefix=""):
+    """Extract schema including nested fields"""
+    schema = []
+
+    for key, value in document.items():
+        # Skip MongoDB _id field
+        if key == '_id':
+            continue
+
+        # Handle nested objects (except arrays)
+        if isinstance(value, dict):
+            nested_schema = get_schema_with_nested(value, f"{key}.")
+            schema.extend(nested_schema)
+        else:
+            if prefix:
+                schema.append(f"{prefix}{key}")
+            else:
+                schema.append(key)
+
+    return schema
+
 
 def get_schema(document):
     return list(document.keys())
@@ -317,6 +561,29 @@ def upload_and_merge_data():
     except Exception as e:
         traceback.print_exc()
         return jsonify({'message': f'Error processing file: {str(e)}'}), 500
+
+
+@app.route('/api/clear-database', methods=['GET'])
+def clear_database():
+    """
+    Simple endpoint to clear all data in the sales collection.
+    """
+    try:
+        # Get count of records before deletion
+        record_count = sales_collection.count_documents({})
+
+        # Clear the sales collection
+        sales_collection.delete_many({})
+
+        return jsonify({
+            'message': f'Successfully cleared {record_count} records from the database',
+            'deleted_count': record_count
+        }), 200
+
+    except Exception as e:
+        return jsonify({
+            'message': f'Error clearing database: {str(e)}'
+        }), 500
 
 if __name__ == '__main__':
     app.run(debug=True, host='0.0.0.0', port=5000)
